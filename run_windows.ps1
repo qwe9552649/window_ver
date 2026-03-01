@@ -30,25 +30,37 @@ Write-Host "  논리 코어  : $LogicalCores  (하이퍼스레딩 포함)"
 
 # ────────────────────────────────────────────────────────────
 # 2. Julia 스레드 / Distributed 워커 수 결정
+#
+# 병목 분석:
+#   - Python pymoo NSGA-II = CPU 집약적 (코어 1개 100% 사용)
+#   - Julia 워커는 Python 실행 중 거의 대기 상태
+#   → 워커 수를 최대화해서 Python 동시 실행 수를 늘리는 것이 핵심
+#   → Julia 스레드는 최소화 (addprocs가 --threads를 워커에 그대로 상속하므로
+#      스레드 수가 많으면 코어 × (워커+1)만큼 과잉 배정됨)
 # ────────────────────────────────────────────────────────────
 
-# Julia --threads: 논리 코어 전부 활용 (Julia 내부 @threads 루프용)
-if ($Threads -eq 0) {
-    $JuliaThreads = $LogicalCores
-} else {
-    $JuliaThreads = $Threads
-}
-
-# Distributed 워커: Julia 코드가 pmap으로 omega를 병렬 처리
-# 메인 프로세스 + OS 여유분(2코어) 제외
+# Distributed 워커: 코어 - 1 (메인 Julia 프로세스용 코어 1개 확보)
 if ($Workers -eq 0) {
-    $NumWorkers = [Math]::Max(1, $LogicalCores - 2)
+    $NumWorkers = [Math]::Max(1, $LogicalCores - 1)
 } else {
     $NumWorkers = $Workers
 }
 
-Write-Host "  Julia 스레드: $JuliaThreads  (--threads $JuliaThreads)"
-Write-Host "  Distributed 워커: $NumWorkers  (NUM_WORKERS=$NumWorkers)"
+# Julia --threads (메인 프로세스 기준):
+#   총 Julia 스레드 = (워커+1) × threads_per_process ≤ 논리 코어 수
+#   → threads_per_process = 논리코어 ÷ (워커+1), 최소 1
+if ($Threads -eq 0) {
+    $JuliaThreads = [Math]::Max(1, [Math]::Floor($LogicalCores / ($NumWorkers + 1)))
+} else {
+    $JuliaThreads = $Threads
+}
+
+$TotalJuliaThreads = $JuliaThreads * ($NumWorkers + 1)
+
+Write-Host "[ 성능 배분 계획 ]"
+Write-Host "  Distributed 워커 수: $NumWorkers  → Python 동시 실행 $NumWorkers 개"
+Write-Host "  Julia 스레드/프로세스: $JuliaThreads  → 총 Julia 스레드: $TotalJuliaThreads / $LogicalCores 코어"
+Write-Host "  (Python이 병목이므로 Julia 스레드는 최소, 워커 수를 최대화)"
 Write-Host ""
 
 # ────────────────────────────────────────────────────────────

@@ -27,20 +27,31 @@ else
     const _ALNS_SCRIPT_LOADED = true
     const IS_MAIN_PROCESS = (myid() == 1)
 
-    # 워커 수: 환경변수 NUM_WORKERS → 자동 탐지 (논리 코어 수 - 2, 최소 1)
-    # Julia 스레드와 Python 서브프로세스를 위해 코어 2개를 OS용으로 남김
+    # ─── 워커 수 결정 ───────────────────────────────────────────────────────
+    # 병목은 Python pymoo(CPU 집약적). 워커 수 = Python 동시 실행 수.
+    # 메인 Julia 프로세스용 코어 1개만 남기고 나머지를 워커에 할당.
+    # 환경변수 NUM_WORKERS로 오버라이드 가능.
     const NUM_WORKERS = let env = get(ENV, "NUM_WORKERS", "")
         if !isempty(env)
-            try parse(Int, env) catch; max(1, Sys.CPU_THREADS - 2) end
+            try parse(Int, env) catch; max(1, Sys.CPU_THREADS - 1) end
         else
-            max(1, Sys.CPU_THREADS - 2)
+            max(1, Sys.CPU_THREADS - 1)
         end
+    end
+
+    # ─── 워커당 Julia 스레드 수 결정 ────────────────────────────────────────
+    # addprocs()는 --threads 설정을 각 워커에 그대로 상속.
+    # 전체 Julia 스레드 합계가 코어 수를 초과하지 않도록 워커당 스레드를 제한.
+    # Python이 병목이므로 Julia 스레드는 최소(1~2개)면 충분.
+    const THREADS_PER_WORKER = let
+        total_processes = NUM_WORKERS + 1  # 워커 + 메인
+        max(1, Sys.CPU_THREADS ÷ total_processes)
     end
 
     # 1. 워커 추가 (메인 프로세스에서만, 아직 추가되지 않은 경우)
     if IS_MAIN_PROCESS && nprocs() == 1
-        addprocs(NUM_WORKERS)
-    println("🚀 Added $(nprocs()-1) worker processes. (CPU threads: $(Sys.CPU_THREADS), Julia threads: $(Threads.nthreads()))")
+        addprocs(NUM_WORKERS; exeflags="--threads=$(THREADS_PER_WORKER)")
+    println("🚀 Workers: $(nprocs()-1)개 | 워커당 Julia스레드: $(THREADS_PER_WORKER) | 총CPU코어: $(Sys.CPU_THREADS)")
     end
 
     # 2. 워커에서 현재 스크립트 로드 (메인에서만 호출!)
