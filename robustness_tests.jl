@@ -1448,7 +1448,7 @@ Re-generate all robustness figures and report from previously saved CSVs.
 No test re-run needed — reads existing CSV files in result_dir.
 
 Usage:
-    regenerate_robustness_figures("/Users/.../Desktop/runs/robustness_results")
+    regenerate_robustness_figures(joinpath(homedir(), "Desktop", "runs", "robustness_results"))
 """
 function regenerate_robustness_figures(result_dir::String=ROBUSTNESS_OUTDIR)
     if !isdir(result_dir)

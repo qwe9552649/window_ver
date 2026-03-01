@@ -115,6 +115,30 @@ const MOO_LAST_PF_MATRIX = Ref{Any}(nothing)  # pymoo Pareto front matrix 직접
 # Python pymoo 스크립트 경로
 const PYMOO_SCRIPT_PATH = joinpath(@__DIR__, "pymoo_vrp_nsga2_hi.py")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 크로스플랫폼 Python 실행 파일 탐지
+# ═══════════════════════════════════════════════════════════════════════════
+
+"""
+    get_python_executable() -> String
+
+시스템에서 사용 가능한 Python 실행 파일 경로를 반환합니다.
+우선순위:
+  1. PyCall이 사용하는 Python (가장 신뢰성 높음)
+  2. Windows: `python`, Unix/macOS: `python3`
+"""
+function get_python_executable()
+    # PyCall이 사용하는 Python 실행 파일 경로를 최우선으로 사용
+    try
+        py = PyCall.python
+        if !isempty(py) && isfile(py)
+            return py
+        end
+    catch
+    end
+    # PyCall 경로를 사용할 수 없는 경우 OS별 기본 명령어로 fallback
+    return Sys.iswindows() ? "python" : "python3"
+end
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 백엔드 버전 확인
@@ -664,8 +688,9 @@ function pyvrp_solve_cvrptw(
             JSON3.write(f, problem_data)
         end
         
-        # Python pymoo 호출
-        pymoo_cmd = `python3 $(PYMOO_SCRIPT_PATH) --input $(input_path) --output $(output_path) --quiet`
+        # Python pymoo 호출 (크로스플랫폼)
+        python_exe = get_python_executable()
+        pymoo_cmd = `$python_exe $(PYMOO_SCRIPT_PATH) --input $(input_path) --output $(output_path) --quiet`
         
         run(pymoo_cmd; wait=true)
         

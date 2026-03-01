@@ -676,7 +676,7 @@ Re-generate all main result figures and report from previously saved CSVs.
 No simulation re-run needed — reads viz_scenario_summary.csv and viz_pareto_points.csv.
 
 Usage:
-    regenerate_main_figures("/Users/.../Desktop/runs/visualizations")
+    regenerate_main_figures(joinpath(homedir(), "Desktop", "runs", "visualizations"))
 """
 function regenerate_main_figures(output_dir::String)
     summary_csv = joinpath(output_dir, "viz_scenario_summary.csv")

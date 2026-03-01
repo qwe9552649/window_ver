@@ -96,8 +96,8 @@ println("f3 range: $(minimum(pf[:, 3])) ~ $(maximum(pf[:, 3])) EUR")
 
 ## 실행 방법
 
-```bash
-# 기본 실행
+```powershell
+# 기본 실행 (Windows PowerShell)
 julia --project=. moo_multitrip_cvrp_budapest.jl
 
 # 특정 시나리오 실행
@@ -121,3 +121,60 @@ julia --project=. -e 'include("moo_multitrip_cvrp_budapest.jl"); run_scenarios_v
 - PyCall.jl
 - Distances.jl
 - OSRM Docker (도로망 거리 계산)
+
+---
+
+## Windows 환경 설정 가이드
+
+### 1. Julia 설치
+[https://julialang.org/downloads/](https://julialang.org/downloads/) 에서 Windows 인스톨러 다운로드 후 설치
+
+### 2. Python 설치
+[https://www.python.org/downloads/](https://www.python.org/downloads/) 에서 Python 3.10 이상 설치  
+> **설치 시 "Add Python to PATH" 반드시 체크**
+
+```powershell
+# pymoo 및 의존 패키지 설치
+pip install pymoo numpy
+```
+
+### 3. Julia 패키지 설치
+
+```powershell
+# PowerShell에서 Julia REPL 실행
+julia
+
+# Julia REPL에서 실행
+]add PyCall JuMP Gurobi Plots DataFrames CSV JSON3 HTTP Clustering Distances HypothesisTests StatsPlots
+
+# PyCall이 현재 Python을 사용하도록 설정
+using PyCall
+```
+
+### 4. Gurobi 설치 (선택사항 — 최적화 솔버)
+[https://www.gurobi.com/downloads/](https://www.gurobi.com/downloads/) 에서 Windows용 설치 후 라이선스 활성화
+
+### 5. OSRM 도로망 서버 실행 (Docker Desktop 필요)
+
+[Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/) 설치 후:
+
+```powershell
+# 차량 프로파일 (포트 5001)
+docker run -p 5001:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm
+
+# 도보 프로파일 (포트 5002)
+docker run -p 5002:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm
+```
+
+> OSRM 없이 실행 시 자동으로 유클리드 거리로 fallback 됩니다.
+
+### 6. 실행
+
+```powershell
+cd C:\path\to\project
+julia --project=. moo_multitrip_cvrp_budapest.jl
+```
+
+### 결과 위치
+실행 후 결과 파일은 `%USERPROFILE%\Desktop\runs\` 폴더에 저장됩니다.  
+(`C:\Users\사용자명\Desktop\runs\`)
