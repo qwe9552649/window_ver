@@ -45,6 +45,28 @@ if ($LASTEXITCODE -ne 0) {
     & $pyExe -m pip install pymoo numpy --quiet
 }
 
+# OSRM 서버 확인 (필수 — 없으면 실행 중단)
+Write-Host "  🔌 OSRM 서버 확인 중..." -NoNewline
+$osrmCar  = $false
+$osrmFoot = $false
+try { Invoke-WebRequest -Uri "http://localhost:5001/health" -TimeoutSec 3 -ErrorAction Stop | Out-Null; $osrmCar  = $true } catch {}
+try { Invoke-WebRequest -Uri "http://localhost:5002/health" -TimeoutSec 3 -ErrorAction Stop | Out-Null; $osrmFoot = $true } catch {}
+
+if (-not ($osrmCar -and $osrmFoot)) {
+    Write-Host ""
+    Write-Host ""
+    Write-Host "  ❌ OSRM 서버에 연결할 수 없어 실행을 중단합니다." -ForegroundColor Red
+    if (-not $osrmCar)  { Write-Host "     • 차량 서버 (포트 5001) 오프라인" -ForegroundColor Red }
+    if (-not $osrmFoot) { Write-Host "     • 도보 서버 (포트 5002) 오프라인" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host "  📌 해결 방법: Docker Desktop을 실행하고 OSRM 컨테이너를 시작하세요." -ForegroundColor Yellow
+    Write-Host "       docker run -d -p 5001:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm" -ForegroundColor White
+    Write-Host "       docker run -d -p 5002:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm" -ForegroundColor White
+    Write-Host ""
+    exit 1
+}
+Write-Host "  ✅ OSRM 차량(5001) + 도보(5002) 모두 정상" -ForegroundColor Green
+
 # ────────────────────────────────────────────────────────────
 # 1. PC 하드웨어 자동 탐지
 # ────────────────────────────────────────────────────────────

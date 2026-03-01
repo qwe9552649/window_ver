@@ -17,6 +17,57 @@ const OSRM_CACHE = Dict{String, Any}()  # 캐시 (key: query, value: result)
 const OSRM_CACHE_LOCK = ReentrantLock()
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# OSRM 서버 연결 필수 확인 (시작 시 호출)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    assert_osrm_available()
+
+OSRM 차량(5001) 및 도보(5002) 서버가 응답하는지 확인.
+하나라도 오프라인이면 즉시 에러로 프로그램을 중단한다.
+유클리드/Haversine 대체는 허용하지 않는다.
+"""
+function assert_osrm_available()
+    errors = String[]
+    for (label, url, port) in [("차량(car)", OSRM_CAR_URL, 5001),
+                                ("도보(foot)", OSRM_FOOT_URL, 5002)]
+        try
+            resp = HTTP.get("$url/health"; connect_timeout=3, readtimeout=5)
+            if resp.status == 200
+                println("  ✅ OSRM $label 서버 정상 (포트 $port)")
+            else
+                push!(errors, "OSRM $label 서버 비정상 응답 (HTTP $(resp.status), 포트 $port)")
+            end
+        catch e
+            push!(errors, "OSRM $label 서버 오프라인 (포트 $port): $e")
+        end
+    end
+
+    if !isempty(errors)
+        println("\n" * "═"^70)
+        println("  ❌ OSRM 서버에 연결할 수 없습니다. 실행을 중단합니다.")
+        println("═"^70)
+        for err in errors
+            println("  • $err")
+        end
+        println("""
+\n  📌 해결 방법:
+  Docker Desktop을 실행한 뒤 아래 명령어로 OSRM 서버를 시작하세요:
+
+  docker run -d -p 5001:5000 osrm/osrm-backend \\
+      osrm-routed --algorithm mld /data/hungary-latest.osrm
+
+  docker run -d -p 5002:5000 osrm/osrm-backend \\
+      osrm-routed --algorithm mld /data/hungary-latest.osrm
+
+  또는: .\\setup_windows.ps1 을 실행하면 OSRM 상태를 확인할 수 있습니다.
+""")
+        println("═"^70)
+        error("OSRM 서버 미연결 — 실행 불가. 위 안내에 따라 OSRM을 먼저 실행하세요.")
+    end
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 기본 API 함수
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -702,8 +753,7 @@ Hybrid 도보 거리 계산 (골목 내 이동 반영)
 function get_hybrid_foot_distance(from_pos::Tuple{Float64,Float64}, to_pos::Tuple{Float64,Float64})
     lock(DISTANCE_STORE_LOCK) do
         if !DISTANCE_STORE.initialized
-            @warn "Distance matrix not initialized, using haversine fallback"
-            return haversine_distance_km(from_pos, to_pos)
+            error("OSRM 거리 행렬이 초기화되지 않았습니다. OSRM 서버가 실행 중인지 확인하세요 (포트 5001, 5002). Haversine 대체는 허용되지 않습니다.")
         end
         
         # foot 스냅된 위치 가져오기

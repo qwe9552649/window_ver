@@ -181,28 +181,39 @@ if (-not $gurobiOk) {
 }
 
 # ────────────────────────────────────────────────────────────
-# 6. OSRM 서버 확인
+# 6. OSRM 서버 확인 (필수 — 없으면 실행 불가)
 # ────────────────────────────────────────────────────────────
-Write-Step "OSRM 도로망 서버 확인 (localhost:5001, 5002)"
+Write-Step "OSRM 도로망 서버 확인 (localhost:5001, 5002)  ← 필수"
 $osrmCar  = $false
 $osrmFoot = $false
 try {
-    $r = Invoke-WebRequest -Uri "http://localhost:5001/health" -TimeoutSec 2 -ErrorAction Stop
+    $r = Invoke-WebRequest -Uri "http://localhost:5001/health" -TimeoutSec 3 -ErrorAction Stop
     $osrmCar = $true
     Write-OK "OSRM 차량 서버 (포트 5001) 작동 중"
-} catch { Write-Warn "OSRM 차량 서버 (포트 5001) 오프라인" }
+} catch { Write-Fail "OSRM 차량 서버 (포트 5001) 오프라인" }
 
 try {
-    $r = Invoke-WebRequest -Uri "http://localhost:5002/health" -TimeoutSec 2 -ErrorAction Stop
+    $r = Invoke-WebRequest -Uri "http://localhost:5002/health" -TimeoutSec 3 -ErrorAction Stop
     $osrmFoot = $true
     Write-OK "OSRM 도보 서버 (포트 5002) 작동 중"
-} catch { Write-Warn "OSRM 도보 서버 (포트 5002) 오프라인" }
+} catch { Write-Fail "OSRM 도보 서버 (포트 5002) 오프라인" }
 
 if (-not ($osrmCar -and $osrmFoot)) {
-    Write-Info "OSRM이 없으면 유클리드 거리로 자동 대체됩니다 (정확도 낮음)."
-    Write-Info "Docker Desktop 설치 후 아래 명령어로 OSRM 실행:"
-    Write-Info "  docker run -p 5001:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm"
-    Write-Info "  docker run -p 5002:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm"
+    Write-Host ""
+    Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
+    Write-Host "  ❌ OSRM 서버가 필요합니다. 유클리드 거리 대체는 허용되지 않습니다." -ForegroundColor Red
+    Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  📌 해결 방법:" -ForegroundColor Yellow
+    Write-Host "    1) Docker Desktop 설치: https://www.docker.com/products/docker-desktop/" -ForegroundColor Yellow
+    Write-Host "    2) Docker 실행 후 아래 명령어 입력:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "       docker run -d -p 5001:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm" -ForegroundColor White
+    Write-Host "       docker run -d -p 5002:5000 osrm/osrm-backend osrm-routed --algorithm mld /data/hungary-latest.osrm" -ForegroundColor White
+    Write-Host ""
+    Write-Host "    3) OSRM 실행 확인 후 이 스크립트를 다시 실행하세요." -ForegroundColor Yellow
+    Write-Host ""
+    $AllOk = $false
 }
 
 # ────────────────────────────────────────────────────────────
