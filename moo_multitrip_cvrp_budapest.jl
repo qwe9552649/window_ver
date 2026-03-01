@@ -20,6 +20,88 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 using Distributed
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# PC 성능 자동 탐지 및 최적 병렬 설정 계산
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""물리 코어 수 탐지 (OS별 명령 사용, 실패 시 논리 코어÷2 fallback)"""
+function detect_physical_cores()::Int
+    try
+        if Sys.iswindows()
+            # Windows: WMIC 또는 PowerShell로 물리 코어 수 조회
+            out = readchomp(`wmic cpu get NumberOfCores /value`)
+            m = match(r"NumberOfCores=(\d+)", out)
+            m !== nothing && return parse(Int, m.captures[1])
+            # fallback: PowerShell
+            out2 = readchomp(`powershell -NoProfile -Command "(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum"`)
+            return parse(Int, strip(out2))
+        elseif Sys.islinux()
+            out = readchomp(`bash -c "grep '^cpu cores' /proc/cpuinfo | head -1 | awk '{print \$NF}'"`)
+            n = parse(Int, strip(out))
+            # 멀티소켓 보정: 소켓 수 × 코어 수
+            sockets = parse(Int, strip(readchomp(`bash -c "grep '^physical id' /proc/cpuinfo | sort -u | wc -l"`)))
+            return max(1, n * sockets)
+        elseif Sys.isapple()
+            return parse(Int, readchomp(`sysctl -n hw.physicalcpu`))
+        end
+    catch
+    end
+    # fallback: 논리 코어의 절반 (하이퍼스레딩 가정)
+    return max(1, Sys.CPU_THREADS ÷ 2)
+end
+
+"""
+    auto_configure_parallel() -> NamedTuple
+
+현재 PC의 CPU(물리/논리 코어)와 가용 RAM을 분석하여
+최적의 Distributed 워커 수와 Julia 스레드 수를 반환한다.
+
+병목 분석:
+  - Python pymoo NSGA-II = CPU 집약적 (프로세스당 물리코어 1개 100% 사용)
+  - Julia 워커는 Python 실행 중 거의 대기 → Julia 스레드는 최소화
+  → 워커 수를 최대화(= Python 동시 실행 수 최대화)가 핵심
+
+제약:
+  - CPU 제약: 워커 수 ≤ 물리코어 - 1 (메인 Julia용 1코어 확보)
+  - RAM 제약: 워커당 ~550MB (Julia 150 + Python/pymoo 400)
+              메인 Julia + OS 여유분 2GB 확보
+"""
+function auto_configure_parallel()
+    logical_cores  = Sys.CPU_THREADS
+    physical_cores = detect_physical_cores()
+    total_mem_gb   = Sys.total_memory() / (1024^3)
+    free_mem_gb    = Sys.free_memory()  / (1024^3)
+
+    # ── CPU 제약 ─────────────────────────────────────────────────────────────
+    # 물리 코어 기반 (하이퍼스레딩은 Python 같은 CPU 집약 작업에 실효 없음)
+    workers_by_cpu = max(1, physical_cores - 1)
+
+    # ── RAM 제약 ─────────────────────────────────────────────────────────────
+    mem_per_worker_gb = 0.55   # Julia worker ~150MB + Python/pymoo ~400MB
+    reserved_gb       = 2.0    # OS + 메인 Julia 프로세스
+    usable_gb         = max(0.0, free_mem_gb - reserved_gb)
+    workers_by_ram    = max(1, floor(Int, usable_gb / mem_per_worker_gb))
+
+    # ── 최종 워커 수: CPU와 RAM 제약 중 보수적인 쪽 ─────────────────────────
+    num_workers = min(workers_by_cpu, workers_by_ram)
+
+    # ── Julia 스레드/프로세스 ────────────────────────────────────────────────
+    # addprocs는 --threads를 워커에 상속 → 총 Julia 스레드 = (워커+1) × threads
+    # 총 Julia 스레드가 논리 코어 수를 초과하지 않도록 분배
+    threads_per_proc = max(1, logical_cores ÷ (num_workers + 1))
+
+    return (
+        num_workers      = num_workers,
+        threads_per_proc = threads_per_proc,
+        physical_cores   = physical_cores,
+        logical_cores    = logical_cores,
+        total_mem_gb     = total_mem_gb,
+        free_mem_gb      = free_mem_gb,
+        workers_by_cpu   = workers_by_cpu,
+        workers_by_ram   = workers_by_ram,
+    )
+end
+
 # 재진입 방지: 이미 로드된 경우 건너뛰기
 if @isdefined(_ALNS_SCRIPT_LOADED)
     # 이미 로드됨 - 함수 정의만 사용, 실행 건너뛰기
@@ -27,31 +109,40 @@ else
     const _ALNS_SCRIPT_LOADED = true
     const IS_MAIN_PROCESS = (myid() == 1)
 
-    # ─── 워커 수 결정 ───────────────────────────────────────────────────────
-    # 병목은 Python pymoo(CPU 집약적). 워커 수 = Python 동시 실행 수.
-    # 메인 Julia 프로세스용 코어 1개만 남기고 나머지를 워커에 할당.
-    # 환경변수 NUM_WORKERS로 오버라이드 가능.
+    # ─── PC 성능 자동 분석 및 최적 설정 계산 ────────────────────────────────
+    const _PC_CONFIG = auto_configure_parallel()
+
     const NUM_WORKERS = let env = get(ENV, "NUM_WORKERS", "")
-        if !isempty(env)
-            try parse(Int, env) catch; max(1, Sys.CPU_THREADS - 1) end
-        else
-            max(1, Sys.CPU_THREADS - 1)
-        end
+        isempty(env) ? _PC_CONFIG.num_workers :
+            (try parse(Int, env) catch; _PC_CONFIG.num_workers end)
     end
 
-    # ─── 워커당 Julia 스레드 수 결정 ────────────────────────────────────────
-    # addprocs()는 --threads 설정을 각 워커에 그대로 상속.
-    # 전체 Julia 스레드 합계가 코어 수를 초과하지 않도록 워커당 스레드를 제한.
-    # Python이 병목이므로 Julia 스레드는 최소(1~2개)면 충분.
-    const THREADS_PER_WORKER = let
-        total_processes = NUM_WORKERS + 1  # 워커 + 메인
-        max(1, Sys.CPU_THREADS ÷ total_processes)
+    const THREADS_PER_WORKER = let env = get(ENV, "THREADS_PER_WORKER", "")
+        isempty(env) ? _PC_CONFIG.threads_per_proc :
+            (try parse(Int, env) catch; _PC_CONFIG.threads_per_proc end)
     end
 
-    # 1. 워커 추가 (메인 프로세스에서만, 아직 추가되지 않은 경우)
+    # 1. 워커 추가 (메인 프로세스에서만)
     if IS_MAIN_PROCESS && nprocs() == 1
+        println("\n┌─────────────────────────────────────────────────────┐")
+        println("│           PC 성능 자동 분석 결과                   │")
+        println("├─────────────────────────────────────────────────────┤")
+        @printf("│  물리 코어    : %2d개                                │\n", _PC_CONFIG.physical_cores)
+        @printf("│  논리 코어    : %2d개  (하이퍼스레딩 포함)          │\n", _PC_CONFIG.logical_cores)
+        @printf("│  전체 RAM     : %5.1f GB                            │\n", _PC_CONFIG.total_mem_gb)
+        @printf("│  가용 RAM     : %5.1f GB                            │\n", _PC_CONFIG.free_mem_gb)
+        println("├─────────────────────────────────────────────────────┤")
+        @printf("│  CPU 제약 워커: %2d개  (물리코어 - 1)               │\n", _PC_CONFIG.workers_by_cpu)
+        @printf("│  RAM 제약 워커: %2d개  (가용RAM ÷ 0.55GB)          │\n", _PC_CONFIG.workers_by_ram)
+        println("├─────────────────────────────────────────────────────┤")
+        @printf("│  ✅ 최종 워커 수      : %2d개                       │\n", NUM_WORKERS)
+        @printf("│  ✅ Julia 스레드/프로세스: %d개                     │\n", THREADS_PER_WORKER)
+        @printf("│  ✅ 총 Julia 스레드   : %2d개 / %d 논리코어        │\n",
+                THREADS_PER_WORKER * (NUM_WORKERS + 1), _PC_CONFIG.logical_cores)
+        println("└─────────────────────────────────────────────────────┘\n")
+
         addprocs(NUM_WORKERS; exeflags="--threads=$(THREADS_PER_WORKER)")
-    println("🚀 Workers: $(nprocs()-1)개 | 워커당 Julia스레드: $(THREADS_PER_WORKER) | 총CPU코어: $(Sys.CPU_THREADS)")
+        println("🚀 워커 $(nprocs()-1)개 시작 완료 — Python 동시 최대 실행: $(NUM_WORKERS)개")
     end
 
     # 2. 워커에서 현재 스크립트 로드 (메인에서만 호출!)
@@ -73,6 +164,7 @@ using JuMP, Gurobi
 using Random, JSON3, GeometryBasics, DataFrames, CSV
 using Statistics, Clustering, Plots, Dates
 using Combinatorics, StatsBase
+using Printf
 using Pkg
 using Distances
 using PyCall
