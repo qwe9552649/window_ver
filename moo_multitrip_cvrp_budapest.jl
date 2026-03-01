@@ -122,27 +122,78 @@ else
             (try parse(Int, env) catch; _PC_CONFIG.threads_per_proc end)
     end
 
-    # 1. 워커 추가 (메인 프로세스에서만)
+    # 1. 메인 프로세스 스레드 수 확인 및 자동 재시작
     if IS_MAIN_PROCESS && nprocs() == 1
-        println("\n┌─────────────────────────────────────────────────────┐")
-        println("│           PC 성능 자동 분석 결과                   │")
-        println("├─────────────────────────────────────────────────────┤")
-        @printf("│  물리 코어    : %2d개                                │\n", _PC_CONFIG.physical_cores)
-        @printf("│  논리 코어    : %2d개  (하이퍼스레딩 포함)          │\n", _PC_CONFIG.logical_cores)
-        @printf("│  전체 RAM     : %5.1f GB                            │\n", _PC_CONFIG.total_mem_gb)
-        @printf("│  가용 RAM     : %5.1f GB                            │\n", _PC_CONFIG.free_mem_gb)
-        println("├─────────────────────────────────────────────────────┤")
-        @printf("│  CPU 제약 워커: %2d개  (물리코어 - 1)               │\n", _PC_CONFIG.workers_by_cpu)
-        @printf("│  RAM 제약 워커: %2d개  (가용RAM ÷ 0.55GB)          │\n", _PC_CONFIG.workers_by_ram)
-        println("├─────────────────────────────────────────────────────┤")
-        @printf("│  ✅ 최종 워커 수      : %2d개                       │\n", NUM_WORKERS)
-        @printf("│  ✅ Julia 스레드/프로세스: %d개                     │\n", THREADS_PER_WORKER)
-        @printf("│  ✅ 총 Julia 스레드   : %2d개 / %d 논리코어        │\n",
-                THREADS_PER_WORKER * (NUM_WORKERS + 1), _PC_CONFIG.logical_cores)
-        println("└─────────────────────────────────────────────────────┘\n")
+        current_threads   = Threads.nthreads()
+        optimal_threads   = THREADS_PER_WORKER  # 메인도 동일 비율로
+
+        # ── 스레드 부족 시: 최적 --threads 로 자동 재시작 ─────────────────
+        if current_threads < optimal_threads
+            println("\n⚡ 스레드 자동 최적화: 현재 $(current_threads)개 → 최적 $(optimal_threads)개")
+            println("   Julia를 최적 스레드 수로 재시작합니다...\n")
+
+            # 현재 스크립트를 올바른 --threads 로 재실행
+            julia_exe  = joinpath(Sys.BINDIR, "julia")
+            script_path = @__FILE__
+            env_overrides = [
+                "NUM_WORKERS=$(NUM_WORKERS)",
+                "THREADS_PER_WORKER=$(optimal_threads)",
+            ]
+            # 기존 환경변수도 전달 (SCENARIOS_TO_RUN 등)
+            for key in ["SCENARIOS_TO_RUN","OMEGA_COUNT","SKIP_ROBUSTNESS","BACKEND","CUSTOMER_LIMIT"]
+                val = get(ENV, key, "")
+                isempty(val) || push!(env_overrides, "$key=$val")
+            end
+
+            cmd = Cmd([julia_exe,
+                       "--threads=$(optimal_threads)",
+                       "--project=$(dirname(script_path))",
+                       script_path];
+                      env = merge(ENV, Dict(k => split(k*"=",  "="; limit=2)[end]
+                                            for k in env_overrides
+                                            if occursin("=", k)
+                                            )))
+
+            # 올바른 형태로 재구성
+            new_env = copy(ENV)
+            for kv in env_overrides
+                k, v = split(kv, "="; limit=2)
+                new_env[k] = v
+            end
+            restart_cmd = addenv(
+                `$julia_exe --threads=$optimal_threads --project=$(dirname(script_path)) $script_path`,
+                new_env
+            )
+            run(restart_cmd)
+            exit(0)  # 현재 프로세스 종료 (재시작된 프로세스가 이어받음)
+        end
+
+        # ── 분석 결과 출력 ────────────────────────────────────────────────
+        println("\n┌─────────────────────────────────────────────────────────┐")
+        println("│            PC 성능 자동 분석 및 최적 병렬 설정          │")
+        println("├─────────────────────────────────────────────────────────┤")
+        @printf("│  물리 코어  : %2d개                                      │\n", _PC_CONFIG.physical_cores)
+        @printf("│  논리 코어  : %2d개  (하이퍼스레딩 %s)          │\n",
+                _PC_CONFIG.logical_cores,
+                _PC_CONFIG.logical_cores > _PC_CONFIG.physical_cores ? "ON " : "OFF")
+        @printf("│  전체 RAM   : %5.1f GB                                  │\n", _PC_CONFIG.total_mem_gb)
+        @printf("│  가용 RAM   : %5.1f GB                                  │\n", _PC_CONFIG.free_mem_gb)
+        println("├─────────────────────────────────────────────────────────┤")
+        @printf("│  CPU 제약 워커: %2d개  (물리코어%2d - 1)                 │\n",
+                _PC_CONFIG.workers_by_cpu, _PC_CONFIG.physical_cores)
+        @printf("│  RAM 제약 워커: %2d개  (가용%.1fGB ÷ 0.55GB)           │\n",
+                _PC_CONFIG.workers_by_ram, _PC_CONFIG.free_mem_gb)
+        println("├─────────────────────────────────────────────────────────┤")
+        @printf("│  ✅ Distributed 워커     : %2d개  → Python 동시 실행 %2d개│\n", NUM_WORKERS, NUM_WORKERS)
+        @printf("│  ✅ Julia 스레드/프로세스 :  %d개                        │\n", current_threads)
+        @printf("│  ✅ 총 Julia 스레드      : %2d개 / %2d 논리코어          │\n",
+                current_threads * (NUM_WORKERS + 1), _PC_CONFIG.logical_cores)
+        @printf("│  ✅ 코어 가동률          : %3d%%  (Python 기준)          │\n",
+                round(Int, NUM_WORKERS / _PC_CONFIG.physical_cores * 100))
+        println("└─────────────────────────────────────────────────────────┘\n")
 
         addprocs(NUM_WORKERS; exeflags="--threads=$(THREADS_PER_WORKER)")
-        println("🚀 워커 $(nprocs()-1)개 시작 완료 — Python 동시 최대 실행: $(NUM_WORKERS)개")
+        println("🚀 워커 $(nprocs()-1)개 시작 완료 — 병렬 처리 준비 완료")
     end
 
     # 2. 워커에서 현재 스크립트 로드 (메인에서만 호출!)
