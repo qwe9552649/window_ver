@@ -17,6 +17,35 @@ param(
 )
 
 # ────────────────────────────────────────────────────────────
+# 0. 필수 환경 사전 체크
+# ────────────────────────────────────────────────────────────
+$env:PATH = [System.Environment]::GetEnvironmentVariable("PATH","Machine") + ";" +
+            [System.Environment]::GetEnvironmentVariable("PATH","User")
+
+$missingList = @()
+
+if (-not (Get-Command julia  -ErrorAction SilentlyContinue)) { $missingList += "Julia" }
+if (-not (Get-Command python -ErrorAction SilentlyContinue) -and
+    -not (Get-Command python3 -ErrorAction SilentlyContinue)) { $missingList += "Python" }
+
+if ($missingList.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  ❌ 필수 프로그램이 설치되어 있지 않습니다: $($missingList -join ', ')" -ForegroundColor Red
+    Write-Host "  ➡  먼저 setup_windows.ps1 을 실행하세요:" -ForegroundColor Yellow
+    Write-Host "       .\setup_windows.ps1" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
+# pymoo 설치 여부 확인
+$pyExe = if (Get-Command python3 -ErrorAction SilentlyContinue) { "python3" } else { "python" }
+$pymooCheck = & $pyExe -c "import pymoo" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ⚠️  pymoo가 없습니다. 자동 설치 중..." -ForegroundColor Yellow
+    & $pyExe -m pip install pymoo numpy --quiet
+}
+
+# ────────────────────────────────────────────────────────────
 # 1. PC 하드웨어 자동 탐지
 # ────────────────────────────────────────────────────────────
 $CpuInfo      = Get-CimInstance Win32_Processor
