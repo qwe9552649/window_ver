@@ -26,12 +26,21 @@ if @isdefined(_ALNS_SCRIPT_LOADED)
 else
     const _ALNS_SCRIPT_LOADED = true
     const IS_MAIN_PROCESS = (myid() == 1)
-    const NUM_WORKERS = 4
+
+    # 워커 수: 환경변수 NUM_WORKERS → 자동 탐지 (논리 코어 수 - 2, 최소 1)
+    # Julia 스레드와 Python 서브프로세스를 위해 코어 2개를 OS용으로 남김
+    const NUM_WORKERS = let env = get(ENV, "NUM_WORKERS", "")
+        if !isempty(env)
+            try parse(Int, env) catch; max(1, Sys.CPU_THREADS - 2) end
+        else
+            max(1, Sys.CPU_THREADS - 2)
+        end
+    end
 
     # 1. 워커 추가 (메인 프로세스에서만, 아직 추가되지 않은 경우)
     if IS_MAIN_PROCESS && nprocs() == 1
         addprocs(NUM_WORKERS)
-    println("🚀 Added $(nprocs()-1) worker processes.")
+    println("🚀 Added $(nprocs()-1) worker processes. (CPU threads: $(Sys.CPU_THREADS), Julia threads: $(Threads.nthreads()))")
     end
 
     # 2. 워커에서 현재 스크립트 로드 (메인에서만 호출!)

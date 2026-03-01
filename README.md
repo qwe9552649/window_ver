@@ -66,6 +66,26 @@ S_j = 1 / (1 + w_j)²
 - **OSRM**: 실제 도로망 기반 거리/시간 계산
 - **Monte Carlo**: 다중 시뮬레이션 (omega)
 
+## 병렬화 구조 (Windows 완전 지원)
+
+```
+Julia 메인 프로세스 (--threads N)
+│
+├── Julia Threads (@threads)       ← 단일 경로 내 계산 병렬화
+│
+└── Distributed Workers (pmap)     ← omega(Monte Carlo) 레벨 병렬화
+     ├── Worker 1: omega=1 → pymoo NSGA-II (Python 서브프로세스)
+     ├── Worker 2: omega=2 → pymoo NSGA-II (Python 서브프로세스)
+     ├── Worker 3: omega=3 → pymoo NSGA-II (Python 서브프로세스)
+     └── Worker N: omega=N → pymoo NSGA-II (Python 서브프로세스)
+```
+
+| 구성 요소 | 방식 | Windows 지원 | 자동 설정 |
+|-----------|------|:---:|:---:|
+| Julia 스레드 | `--threads auto` | ✅ | ✅ `run_windows.ps1` |
+| Distributed 워커 | `pmap` + `addprocs` | ✅ | ✅ CPU 코어 수 기반 |
+| Python pymoo | 서브프로세스 | ✅ | ✅ PyCall 경로 자동 탐지 |
+
 ## 파일 구조
 
 ```
@@ -96,12 +116,33 @@ println("f3 range: $(minimum(pf[:, 3])) ~ $(maximum(pf[:, 3])) EUR")
 
 ## 실행 방법
 
+### Windows — 최적 성능 (권장)
+
 ```powershell
-# 기본 실행 (Windows PowerShell)
-julia --project=. moo_multitrip_cvrp_budapest.jl
+# CPU 코어 수를 자동 감지하여 최대 성능으로 실행
+.\run_windows.ps1
+
+# 특정 시나리오만 실행
+.\run_windows.ps1 -Scenarios "1,2,3"
+
+# Robustness 테스트 생략 (빠른 결과 확인)
+.\run_windows.ps1 -SkipRobustness
+
+# 수동으로 스레드/워커 수 지정
+.\run_windows.ps1 -Threads 8 -Workers 6
+```
+
+### 수동 실행 (고급)
+
+```powershell
+# --threads auto: Julia가 논리 코어 수만큼 스레드 자동 설정
+# NUM_WORKERS: Distributed 워커 수 (pmap 병렬 처리)
+$env:NUM_WORKERS = "6"
+julia --threads auto --project=. moo_multitrip_cvrp_budapest.jl
 
 # 특정 시나리오 실행
-julia --project=. -e 'include("moo_multitrip_cvrp_budapest.jl"); run_scenarios_v2([1,2,3,5], 10)'
+$env:SCENARIOS_TO_RUN = "1,2,3,5"
+julia --threads auto --project=. moo_multitrip_cvrp_budapest.jl
 ```
 
 ## 시나리오
